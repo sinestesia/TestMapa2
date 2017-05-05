@@ -3,17 +3,16 @@ package es.pamp.testmapa;
 import android.Manifest;
 import android.app.PendingIntent;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
-import android.location.Location;
 import android.location.LocationListener;
-import android.os.Build;
 import android.support.annotation.NonNull;
-import android.support.annotation.Nullable;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.app.FragmentActivity;
 import android.os.Bundle;
 import android.support.v4.content.ContextCompat;
+import android.support.v7.app.ActionBarActivity;
 import android.support.v7.app.AppCompatActivity;
 import android.util.Log;
 import android.view.View;
@@ -26,7 +25,6 @@ import com.google.android.gms.common.api.ResultCallback;
 import com.google.android.gms.common.api.Status;
 import com.google.android.gms.location.Geofence;
 import com.google.android.gms.location.GeofencingRequest;
-import com.google.android.gms.location.LocationRequest;
 import com.google.android.gms.location.LocationServices;
 import com.google.android.gms.maps.CameraUpdate;
 import com.google.android.gms.maps.CameraUpdateFactory;
@@ -40,25 +38,52 @@ import com.google.android.gms.maps.model.Marker;
 import com.google.android.gms.maps.model.MarkerOptions;
 
 import java.util.ArrayList;
+import java.util.Map;
 
-public class MapsActivity extends AppCompatActivity implements GoogleMap.OnMyLocationButtonClickListener, OnMapReadyCallback, ActivityCompat.OnRequestPermissionsResultCallback {
-
+public class MapsActivity extends AppCompatActivity implements GoogleMap.OnMyLocationButtonClickListener, OnMapReadyCallback, ActivityCompat.OnRequestPermissionsResultCallback,
+        GoogleApiClient.ConnectionCallbacks, GoogleApiClient.OnConnectionFailedListener, ResultCallback<Status> {
 
     private Marker mInicio;
     private CameraUpdate campUp1;
     private LatLng posicionInicio;
     private GoogleMap mMap;
 
-    //permisos
     private static final int LOCATION_PERMISSION_REQUEST_CODE = 1;
     private boolean mPermissionDenied = false;
 
-    //geofence
-    private static final String TAG = "MainActivity";
-    private Button startLocationMonitoring; //TODO borrar botones
-    private Button startGeofenceMonitoring;
-    private Button stopGeofenceMonitoring;
-    private GoogleApiClient googleApiClient = null;
+
+    //Geofence
+    protected static final String TAG = "MainActivity";
+
+    /**
+     * Provides the entry point to Google Play services.
+     */
+    protected GoogleApiClient mGoogleApiClient;
+
+    /**
+     * The list of geofences used in this sample.
+     */
+    protected ArrayList<Geofence> mGeofenceList;
+
+    /**
+     * Used to keep track of whether geofences were added.
+     */
+    private boolean mGeofencesAdded;
+
+    /**
+     * Used when requesting to add or remove geofences.
+     */
+    private PendingIntent mGeofencePendingIntent;
+
+    /**
+     * Used to persist application state about whether geofences were added.
+     */
+    private SharedPreferences mSharedPreferences;
+
+    // Buttons for kicking off the process of adding or removing geofences.
+    private Button mAddGeofencesButton;
+    private Button mRemoveGeofencesButton;
+
 
 
     @Override
@@ -69,79 +94,44 @@ public class MapsActivity extends AppCompatActivity implements GoogleMap.OnMyLoc
         SupportMapFragment mapFragment = (SupportMapFragment) getSupportFragmentManager()
                 .findFragmentById(R.id.map);
         mapFragment.getMapAsync(this);
-        //geofence
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION,
-                            Manifest.permission.ACCESS_COARSE_LOCATION},
-                    1234);
-        }
-        //Setup the Api client
-        googleApiClient = new GoogleApiClient.Builder(this)
-                .addApi(LocationServices.API)
-                .addConnectionCallbacks(new GoogleApiClient.ConnectionCallbacks() {
-                    @Override
-                    public void onConnected(@Nullable Bundle bundle) {
-                        Log.w(TAG, "connected to GoogleApi client");
-                    }
-
-                    @Override
-                    public void onConnectionSuspended(int i) {
-                        Log.w(TAG, "suspended to GoogleApi client");
-                    }
-                })
-                .addOnConnectionFailedListener(new GoogleApiClient.OnConnectionFailedListener() {
-                    @Override
-                    public void onConnectionFailed(@NonNull ConnectionResult connectionResult) {
-                        Log.w(TAG, "failed to GoogleApi client");
-
-                    }
-                })
-                .build();
-        googleApiClient.connect();
-        //geofence
-        //startLocationMonitoring = (Button) findViewById(R.id.startLocMonitoring);
-        //startGeofenceMonitoring = (Button) findViewById(R.id.startGeoFMon);
-        //stopGeofenceMonitoring = (Button) findViewById(R.id.stopGeofenMon);
-
-        /*
-        startLocationMonitoring.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                startLocationMonitoring();
-            }
-        });
-        startGeofenceMonitoring.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                startGeofencMonitroing();
-            }
-        });
-        stopGeofenceMonitoring.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                stopGeofenceMonitoring();
-            }
-        });
 
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION,
-                            Manifest.permission.ACCESS_COARSE_LOCATION},
-                    1234);
-        }
-        */
+
+        //Código de Geofence
+        // Get the UI widgets.
+        //mAddGeofencesButton = (Button) findViewById(R.id.add_geofences_button);
+       // mRemoveGeofencesButton = (Button) findViewById(R.id.remove_geofences_button);
+
+        // Empty list for storing geofences.
+        mGeofenceList = new ArrayList<Geofence>();
+
+        // Initially set the PendingIntent used in addGeofences() and removeGeofences() to null.
+        mGeofencePendingIntent = null;
+
+        // Retrieve an instance of the SharedPreferences object.
+        mSharedPreferences = getSharedPreferences(Constants.SHARED_PREFERENCES_NAME,
+                MODE_PRIVATE);
+
+        // Get the value of mGeofencesAdded from SharedPreferences. Set to false as a default.
+        mGeofencesAdded = mSharedPreferences.getBoolean(Constants.GEOFENCES_ADDED_KEY, false);
+        setButtonsEnabledState();
+
+        // Get the geofences used. Geofence data is hard coded in this sample.
+        populateGeofenceList();
+
+        // Kick off the request to build GoogleApiClient.
+        buildGoogleApiClient();
+
+
+
 
     }
-
-
 
     @Override
     public void onMapReady(GoogleMap googleMap) {
         mMap = googleMap;
 
-        //posicionInicio = new LatLng(40.4095457,-3.6914855);//retiro
-        //posicionInicio = new LatLng(40.2942539,-3.7456561);//getafe -1
-        posicionInicio = new LatLng(40.29425,-3.74565);//getafe -1
+        posicionInicio = new LatLng(40.2935097,-3.7447966);
         mInicio = mMap.addMarker(new MarkerOptions()
                 .position(posicionInicio)
                 .title("Inicio")
@@ -152,8 +142,36 @@ public class MapsActivity extends AppCompatActivity implements GoogleMap.OnMyLoc
         mMap.moveCamera(campUp1);
 
         mMap.setOnMyLocationButtonClickListener(this);
-
         enableMyLocation();
+
+        //pintar circulo
+        CircleOptions circleOptions = new CircleOptions()
+                .center( new LatLng(40.2935097,-3.7447966) )
+                .radius(100)
+                .fillColor(0x40ff0000)
+                //.strokeColor(Color.TRANSPARENT)
+                .strokeColor(Color.RED)
+                .strokeWidth(2);
+        mMap.addCircle(circleOptions);
+
+//pintar circulo
+        CircleOptions circleOptions1 = new CircleOptions()
+                .center( new LatLng(40.292675,-3.7466302) )
+                .radius(100)
+                .fillColor(0x40ff0000)
+                //.strokeColor(Color.TRANSPARENT)
+                .strokeColor(Color.RED)
+                .strokeWidth(2);
+        mMap.addCircle(circleOptions1);
+
+        CircleOptions circleOptions2 = new CircleOptions()
+                .center( new LatLng(40.294471,-3.7484912) )
+                .radius(100)
+                .fillColor(0x40ff0000)
+                //.strokeColor(Color.TRANSPARENT)
+                .strokeColor(Color.RED)
+                .strokeWidth(2);
+        mMap.addCircle(circleOptions2);
 
     }
 
@@ -169,10 +187,6 @@ public class MapsActivity extends AppCompatActivity implements GoogleMap.OnMyLoc
         } else if (mMap != null) {
             // Access to the location has been granted to the app.
             mMap.setMyLocationEnabled(true);
-
-
-            startGeofencMonitroing();
-            startLocationMonitoring();
         }
     }
 
@@ -221,124 +235,229 @@ public class MapsActivity extends AppCompatActivity implements GoogleMap.OnMyLoc
 
 
 
-    //Geofence
+    //Código de geofence
 
+    /**
+     * Builds a GoogleApiClient. Uses the {@code #addApi} method to request the LocationServices API.
+     */
+    protected synchronized void buildGoogleApiClient() {
+        mGoogleApiClient = new GoogleApiClient.Builder(this)
+                .addConnectionCallbacks(this)
+                .addOnConnectionFailedListener(this)
+                .addApi(LocationServices.API)
+                .build();
+    }
 
     @Override
-    public void onStart() {
-        if(googleApiClient !=null) {
-            googleApiClient.connect();
-        }
-        Log.w(TAG, "onStart");
+    protected void onStart() {
         super.onStart();
+        mGoogleApiClient.connect();
     }
 
     @Override
-    public void onStop() {
-
-        if(googleApiClient !=null) {
-            googleApiClient.disconnect();
-        }
-        Log.w(TAG, "onStop");
+    protected void onStop() {
         super.onStop();
+        mGoogleApiClient.disconnect();
     }
 
-    private void startLocationMonitoring() {
-        Log.w(TAG, "Starting Location Monitoring");
-        try {
-            LocationRequest locationRequest = LocationRequest.create()
-                    .setInterval(2000)
-                    .setFastestInterval(1000)
-                    .setSmallestDisplacement(0)
-                    .setMaxWaitTime(2000)
-                    .setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY);
-
-            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED && ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-                //Do Nothing
-            } else {
-
-                Log.w(TAG, "Starting request updates");
-                LocationServices.FusedLocationApi.requestLocationUpdates(googleApiClient,
-                        locationRequest, new com.google.android.gms.location.LocationListener() {
-                            @Override
-                            public void onLocationChanged(Location location) {
-                                Log.w(TAG, "Location update" + location.getLatitude() + "," + location.getLongitude());
-                            }
-                        });
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "Error", e);
-        }
-
-    }
-
-    //Añade puntos
-    private void startGeofencMonitroing() {
-        Log.w(TAG, "Starting Geofence Monitoring");
-        try {
-            Geofence geofence = new Geofence.Builder()
-                    .setRequestId("GEO-1")
-                    .setCircularRegion(40.2929914,-3.7468589, 50) //latitud longitud y metros // posicion getafe
-
-                    .setExpirationDuration(Geofence.NEVER_EXPIRE)
-                    .setNotificationResponsiveness(1000)
-                    .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_ENTER | Geofence.GEOFENCE_TRANSITION_EXIT) //TODO ¿Dejar solo Enter?
-                    .build();
-
-            GeofencingRequest geofencingRequest = new GeofencingRequest.Builder()
-                    .setInitialTrigger(GeofencingRequest.INITIAL_TRIGGER_ENTER)
-                    .addGeofence(geofence)
-                    .build();
-
-            //Pintar un circulo en la misma posicion
-            CircleOptions circleOptions = new CircleOptions()
-                    .center( new LatLng(40.2975554,-3.7473926) )
-                    .radius(50)
-                    .fillColor(0x40ff0000)
-                    //.strokeColor(Color.TRANSPARENT)
-                    .strokeColor(Color.RED)
-                    .strokeWidth(2);
-            mMap.addCircle(circleOptions);
-
-
-            Intent intent = new Intent(this, GeofenceTransitionsIntentService.class);
-            PendingIntent pendingIntent = PendingIntent.getService(this, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT);
-
-            if (!googleApiClient.isConnected()) {
-                Log.w(TAG, "Google API Not Connected");
-            } else {
-                if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-                    // do nothing
-                } else {
-                    LocationServices.GeofencingApi.addGeofences(googleApiClient, geofencingRequest, pendingIntent)
-                            .setResultCallback(new ResultCallback<Status>() {
-                                @Override
-                                public void onResult(@NonNull Status status) {
-                                    if (status.isSuccess()) {
-                                        Log.w(TAG, "Successfully Added Geofence");
-                                    } else {
-                                        Log.w(TAG, "Error added geofence");
-                                    }
-                                }
-                            });
-                }
-
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "Error", e);
-        }
-
-    }
-//Para quitar puntos
-    private void stopGeofenceMonitoring() {
-        Log.w(TAG, "Stopping Geofence Monitoring");
-        ArrayList<String> geofenceIds = new ArrayList<>();
-        geofenceIds.add("GEO-1");
-        LocationServices.GeofencingApi.removeGeofences(googleApiClient, geofenceIds);
+    /**
+     * Runs when a GoogleApiClient object successfully connects.
+     */
+    @Override
+    public void onConnected(Bundle connectionHint) {
+        Log.i(TAG, "Connected to GoogleApiClient");
+        addGeofencesButtonHandler();
     }
 
     @Override
-    protected void onResume() {
-        super.onResume();
+    public void onConnectionFailed(ConnectionResult result) {
+        // Refer to the javadoc for ConnectionResult to see what error codes might be returned in
+        // onConnectionFailed.
+        Log.i(TAG, "Connection failed: ConnectionResult.getErrorCode() = " + result.getErrorCode());
     }
+
+    @Override
+    public void onConnectionSuspended(int cause) {
+        // The connection to Google Play services was lost for some reason.
+        Log.i(TAG, "Connection suspended");
+
+        // onConnected() will be called again automatically when the service reconnects
+    }
+
+    /**
+     * Builds and returns a GeofencingRequest. Specifies the list of geofences to be monitored.
+     * Also specifies how the geofence notifications are initially triggered.
+     */
+    private GeofencingRequest getGeofencingRequest() {
+        GeofencingRequest.Builder builder = new GeofencingRequest.Builder();
+
+        // The INITIAL_TRIGGER_ENTER flag indicates that geofencing service should trigger a
+        // GEOFENCE_TRANSITION_ENTER notification when the geofence is added and if the device
+        // is already inside that geofence.
+        builder.setInitialTrigger(GeofencingRequest.INITIAL_TRIGGER_ENTER);
+
+        // Add the geofences to be monitored by geofencing service.
+        builder.addGeofences(mGeofenceList);
+
+        // Return a GeofencingRequest.
+        return builder.build();
+    }
+
+    /**
+     * Adds geofences, which sets alerts to be notified when the device enters or exits one of the
+     * specified geofences. Handles the success or failure results returned by addGeofences().
+     */
+    public void addGeofencesButtonHandler() {
+        if (!mGoogleApiClient.isConnected()) {
+            Toast.makeText(this, getString(R.string.not_connected), Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        try {
+            LocationServices.GeofencingApi.addGeofences(
+                    mGoogleApiClient,
+                    // The GeofenceRequest object.
+                    getGeofencingRequest(),
+                    // A pending intent that that is reused when calling removeGeofences(). This
+                    // pending intent is used to generate an intent when a matched geofence
+                    // transition is observed.
+                    getGeofencePendingIntent()
+            ).setResultCallback(this); // Result processed in onResult().
+        } catch (SecurityException securityException) {
+            // Catch exception generated if the app does not use ACCESS_FINE_LOCATION permission.
+            logSecurityException(securityException);
+        }
+    }
+
+    /**
+     * Removes geofences, which stops further notifications when the device enters or exits
+     * previously registered geofences.
+     */
+    public void removeGeofencesButtonHandler(View view) {
+        if (!mGoogleApiClient.isConnected()) {
+            Toast.makeText(this, getString(R.string.not_connected), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        try {
+            // Remove geofences.
+            LocationServices.GeofencingApi.removeGeofences(
+                    mGoogleApiClient,
+                    // This is the same pending intent that was used in addGeofences().
+                    getGeofencePendingIntent()
+            ).setResultCallback(this); // Result processed in onResult().
+        } catch (SecurityException securityException) {
+            // Catch exception generated if the app does not use ACCESS_FINE_LOCATION permission.
+            logSecurityException(securityException);
+        }
+    }
+
+    private void logSecurityException(SecurityException securityException) {
+        Log.e(TAG, "Invalid location permission. " +
+                "You need to use ACCESS_FINE_LOCATION with geofences", securityException);
+    }
+
+    /**
+     * Runs when the result of calling addGeofences() and removeGeofences() becomes available.
+     * Either method can complete successfully or with an error.
+     *
+     * Since this activity implements the {@link ResultCallback} interface, we are required to
+     * define this method.
+     *
+     * @param status The Status returned through a PendingIntent when addGeofences() or
+     *               removeGeofences() get called.
+     */
+    public void onResult(Status status) {
+        if (status.isSuccess()) {
+            // Update state and save in shared preferences.
+            mGeofencesAdded = !mGeofencesAdded;
+            SharedPreferences.Editor editor = mSharedPreferences.edit();
+            editor.putBoolean(Constants.GEOFENCES_ADDED_KEY, mGeofencesAdded);
+            editor.apply();
+
+            // Update the UI. Adding geofences enables the Remove Geofences button, and removing
+            // geofences enables the Add Geofences button.
+            setButtonsEnabledState();
+
+            Toast.makeText(
+                    this,
+                    getString(mGeofencesAdded ? R.string.geofences_added :
+                            R.string.geofences_removed),
+                    Toast.LENGTH_SHORT
+            ).show();
+        } else {
+            // Get the status code for the error and log it using a user-friendly message.
+            String errorMessage = GeofenceErrorMessages.getErrorString(this,
+                    status.getStatusCode());
+            Log.e(TAG, errorMessage);
+        }
+    }
+
+    /**
+     * Gets a PendingIntent to send with the request to add or remove Geofences. Location Services
+     * issues the Intent inside this PendingIntent whenever a geofence transition occurs for the
+     * current list of geofences.
+     *
+     * @return A PendingIntent for the IntentService that handles geofence transitions.
+     */
+    private PendingIntent getGeofencePendingIntent() {
+        // Reuse the PendingIntent if we already have it.
+        if (mGeofencePendingIntent != null) {
+            return mGeofencePendingIntent;
+        }
+        Intent intent = new Intent(this, GeofenceTransitionsIntentService.class);
+        // We use FLAG_UPDATE_CURRENT so that we get the same pending intent back when calling
+        // addGeofences() and removeGeofences().
+        return PendingIntent.getService(this, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT);
+    }
+
+    /**
+     * This sample hard codes geofence data. A real app might dynamically create geofences based on
+     * the user's location.
+     */
+    public void populateGeofenceList() {
+        for (Map.Entry<String, LatLng> entry : Constants.BAY_AREA_LANDMARKS.entrySet()) {
+
+            mGeofenceList.add(new Geofence.Builder()
+                    // Set the request ID of the geofence. This is a string to identify this
+                    // geofence.
+                    .setRequestId(entry.getKey())
+
+                    // Set the circular region of this geofence.
+                    .setCircularRegion(
+                            entry.getValue().latitude,
+                            entry.getValue().longitude,
+                            Constants.GEOFENCE_RADIUS_IN_METERS
+                    )
+
+                    // Set the expiration duration of the geofence. This geofence gets automatically
+                    // removed after this period of time.
+                    .setExpirationDuration(Constants.GEOFENCE_EXPIRATION_IN_MILLISECONDS)
+
+                    // Set the transition types of interest. Alerts are only generated for these
+                    // transition. We track entry and exit transitions in this sample.
+                    .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_ENTER |
+                            Geofence.GEOFENCE_TRANSITION_EXIT)
+
+                    // Create the geofence.
+                    .build());
+        }
+    }
+
+    /**
+     * Ensures that only one button is enabled at any time. The Add Geofences button is enabled
+     * if the user hasn't yet added geofences. The Remove Geofences button is enabled if the
+     * user has added geofences.
+     */
+    private void setButtonsEnabledState() {
+       /* if (mGeofencesAdded) {
+            mAddGeofencesButton.setEnabled(false);
+            mRemoveGeofencesButton.setEnabled(true);
+        } else {
+            mAddGeofencesButton.setEnabled(true);
+            mRemoveGeofencesButton.setEnabled(false);
+        }*/
+    }
+
+
+
 }
